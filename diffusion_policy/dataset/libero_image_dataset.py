@@ -144,6 +144,13 @@ class LiberoImageDataset(BaseImageDataset):
         return val_set
 
     def get_normalizer(self, mode="limits", **kwargs):
+        
+        # print our all the details of self.replay_buffer
+        # print("#"*10)
+        # print(f"self.replay_buffer: {self.replay_buffer}")
+        # print(f"self.replay_buffer.keys(): {self.replay_buffer.keys()}")
+        # print("#"*10)
+        
         normalizer = LinearNormalizer()
         ## ??
         # action
@@ -158,7 +165,16 @@ class LiberoImageDataset(BaseImageDataset):
             if key.endswith("pos"):
                 this_normalizer = get_range_normalizer_from_stat(stat)
             else:
-                raise RuntimeError("unsupported")
+                # throw a warning instead
+                this_normalizer = get_range_normalizer_from_stat(stat)
+                print("Warning: using range normalizer for lowdim key: {}".format(key))
+                # print(f"key: {key}")
+                # raise RuntimeError("unsupported")
+                
+            # if key == "gripper_state":
+            #     # Identity SingleFieldLinearNormalizer normalize(x) = x
+            #     this_normalizer = get_identity_normalizer_from_stat(stat)
+                
             normalizer[key] = this_normalizer
 
         # image
@@ -208,6 +224,30 @@ def _convert_to_replay(
     n_workers=None,
     max_inflight_tasks=None,
 ):
+    '''
+    obs:
+        agentview:
+            shape: *image_shape
+            type: rgb
+        eyeinhand:
+            shape: *image_shape
+            type: rgb
+        ee_pos:
+            shape: [3]
+            type: low_dim
+        ee_ori:
+            shape: [4]
+            type: low_dim
+        gripper_state:
+            shape: [2]
+            type: low_dim
+        joint_state:
+            shape: [7]
+            type: low_dim
+    action:
+        shape: [7]
+    '''
+    
     if n_workers is None:
         n_workers = multiprocessing.cpu_count()
     if max_inflight_tasks is None:
@@ -221,6 +261,7 @@ def _convert_to_replay(
     for key, attr in obs_shape_meta.items():
         shape = attr["shape"]
         type = attr.get("type", "low_dim")
+        # type = attr.get("type")
         if type == "rgb":
             rgb_keys.append(key)
         elif type == "low_dim":
@@ -233,9 +274,9 @@ def _convert_to_replay(
     episode_ends = list()
     prev_end = 0
     for i in range(num_episodes):
-        dataset_path = os.path.join(dataset_dir, f"episode_{i}.hdf5")
+        dataset_path = os.path.join(dataset_dir, f"demo_{i}.hdf5")
         with h5py.File(dataset_path, "r") as demo:
-            episode_length = demo["/action"].shape[0]
+            episode_length = demo["/root/actions"].shape[0]
             episode_end = prev_end + episode_length
             prev_end = episode_end
             episode_ends.append(episode_end)
@@ -247,24 +288,40 @@ def _convert_to_replay(
 
     # save lowdim data
     for key in tqdm(lowdim_keys + ["action"], desc="Loading lowdim data"):
-        data_key = "observations/" + key
+    # for key in tqdm(lowdim_keys, desc="Loading lowdim data"):
+        # data_key = "observations/" + key
         if key == "action":
-            data_key = "action"
+            data_key = "root/actions"
+        elif key == "ee_pos":
+            data_key = "root/extra_states/ee_pos"
+        elif key == "ee_ori":
+            data_key = "root/extra_states/ee_ori"
+        elif key == "gripper_states":
+            data_key = "root/extra_states/gripper_states"
+        elif key == "joint_states":
+            data_key = "root/extra_states/joint_states"
+        else:
+            # raise RuntimeError(f"unsupported key{}".format(key))
+            # print out unsupported key name
+            raise RuntimeError(f"unsupported key: {key}")
+            
         this_data = list()
         for i in range(num_episodes):
-            dataset_path = os.path.join(dataset_dir, f"episode_{i}.hdf5")
+            dataset_path = os.path.join(dataset_dir, f"demo_{i}.hdf5")
             with h5py.File(dataset_path, "r") as demo:
-                if key == "eef_qpos":
-                    this_data.append(demo[key][:].astype(np.float32))
-                else:
-                    this_data.append(demo[data_key][:].astype(np.float32))
+                this_data.append(demo[data_key][:].astype(np.float32))
         this_data = np.concatenate(this_data, axis=0)
+        
+        print(f"key: {key}, shape: {this_data.shape}")
+        print(f"n_steps: {n_steps}")
+        
         if key == "action":
             assert this_data.shape == (n_steps,) + tuple(shape_meta["action"]["shape"])
         else:
             assert this_data.shape == (n_steps,) + tuple(
                 shape_meta["obs"][key]["shape"]
             )
+        
         _ = data_group.array(
             name=key,
             data=this_data,
@@ -282,6 +339,7 @@ def _convert_to_replay(
             return True
         except Exception as e:
             return False
+    
     with tqdm(
         total=n_steps * len(rgb_keys), desc="Loading image data", mininterval=1.0
     ) as pbar:
@@ -289,23 +347,29 @@ def _convert_to_replay(
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = set()
             for key in rgb_keys:
-
                 shape = tuple(shape_meta["obs"][key]["shape"])
                 c, h, w = shape
                 this_compressor = Jpeg2k(level=50)
                 img_arr = data_group.require_dataset(
                     name=key,
                     shape=(n_steps, h, w, c),
+                    # shape=(1, n_steps, c, h, w),
                     chunks=(1, h, w, c),
                     compressor=this_compressor,
                     dtype=np.uint8,
                 )
 
                 for i in range(num_episodes):
-                    dataset_path = os.path.join(dataset_dir, f"episode_{i}.hdf5")
+                    dataset_path = os.path.join(dataset_dir, f"demo_{i}.hdf5")
                     with h5py.File(dataset_path, "r") as demo:
-                        data_key = f"observations/images/{key}"  # XXX: assume only one camera
+                        # data_key = f"observations/images/{key}"  # XXX: assume only one camera
+                        data_key = f"root/{key}/video"
                         hdf5_arr = demo[data_key]
+                        
+                        # hdf5_arr:(1, n_steps, c, h, w) -> (n_steps, h, w, c)
+                        transformed_arr = np.moveaxis(hdf5_arr[0], 1, -1)
+                        hdf5_arr = transformed_arr
+                         
                         for hdf5_idx in range(hdf5_arr.shape[0]):
                             if len(futures) >= max_inflight_tasks:
                                 # limit number of inflight tasks

@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: cube
+  - task: libero_spatial
 
 name: train_diffusion_unet_image
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
@@ -42,7 +42,7 @@ policy:
       name: resnet18
       weights: null
     resize_shape: null
-    crop_shape: [200, 200] #%$
+    crop_shape: [100, 100] #%$
     # constant center crop
     random_crop: True
     use_group_norm: True
@@ -80,8 +80,8 @@ dataloader:
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 64
-  num_workers: 8
+  batch_size: 256
+  num_workers: 32
   shuffle: False
   pin_memory: True
   persistent_workers: False
@@ -120,7 +120,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: real_drawer
+  project: libero_spatial
   resume: False
   mode: online
   name: ddim_unet_100_16_ViE_320_240_10Hz
