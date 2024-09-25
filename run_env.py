@@ -255,21 +255,25 @@ class DPActionInput:
             with torch.no_grad():
                 result = self.policy.predict_action(obs_dict)
                 action = result["action"][0].detach().to("cpu").numpy()
+                print("inference once")
                 # print(action)
 
             # if a is not too small, step env
             # if np.linalg.norm(self.a) > 0.1:
             
-            for act_horizon in range(action.shape[0]):
+            # for act_horizon in range(action.shape[0]):
+            for act_horizon in range(8):
                 this_act = action[act_horizon]
                 this_act = this_act.reshape(1, 7)
                 self.obs, self.r, self.done, self.info = self.env.step(this_act)
+                self.new_obs(self.obs)
                 # sleep 0.5
-                time.sleep(0.1)
-                                
-            time.sleep(0.5)
+                # time.sleep(0.2)
+
+            print("carries out 8 actions")
+            time.sleep(0.12)
             
-            self.new_obs(self.obs)
+            # self.new_obs(self.obs)
                 # old_a = self.a
                 # self.a = np.zeros(7)
 
