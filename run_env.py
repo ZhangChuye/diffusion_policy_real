@@ -142,6 +142,8 @@ class DPActionInput:
         
         self._setup_obs_buffer()
         
+        self.env_step = 0
+        
     def _setup_policy(self):
         steps_per_inference = 16
         # print("enter")
@@ -196,13 +198,20 @@ class DPActionInput:
         obs_dict = dict()
         obs_dict["agentview"] = torch.from_numpy(self.agent_view_buffer).to(self.device)
         obs_dict["eye_in_hand"] = torch.from_numpy(self.eye_in_hand_buffer).to(self.device)
-        obs_dict["ee_pos"] = torch.from_numpy(self.ee_pos_buffer).to(self.device)
-        obs_dict["ee_ori"] = torch.from_numpy(self.ee_ori_buffer).to(self.device)
+        # obs_dict["ee_pos"] = torch.from_numpy(self.ee_pos_buffer).to(self.device)
+        # obs_dict["ee_ori"] = torch.from_numpy(self.ee_ori_buffer).to(self.device)
         obs_dict["gripper_states"] = torch.from_numpy(self.gripper_states_buffer).to(self.device)
         obs_dict["joint_states"] = torch.from_numpy(self.joint_states_buffer).to(self.device)
         return obs_dict
     
+    
     def new_obs(self, obs):
+        # debug new_obs
+        # print("^"*20)
+        # print(f"step: {self.env_step}")
+        # print(f"entered gripper state: {obs['robot0_gripper_qpos']}")
+        # print(f"gripper state buffer: {self.gripper_states_buffer}")
+        
         # move buffer
         self.agent_view_buffer = np.roll(self.agent_view_buffer, shift=-1, axis=1)
         self.eye_in_hand_buffer = np.roll(self.eye_in_hand_buffer, shift=-1, axis=1)
@@ -210,6 +219,9 @@ class DPActionInput:
         self.ee_ori_buffer = np.roll(self.ee_ori_buffer, shift=-1, axis=1)
         self.gripper_states_buffer = np.roll(self.gripper_states_buffer, shift=-1, axis=1)
         self.joint_states_buffer = np.roll(self.joint_states_buffer, shift=-1, axis=1)
+        
+        # print("-"*20)
+        # print(f"shifted gripper state buffer: {self.gripper_states_buffer}")
         
         # reshape 1, c_id, h, w, c -> 1, c_id, c, h, w        
         agent_img = obs["agentview_image"]
@@ -219,11 +231,19 @@ class DPActionInput:
         # update buffer
         self.agent_view_buffer[0, 1] = agent_img[0]
         self.eye_in_hand_buffer[0, 1] = eye_in_hand_img[0]
-        self.ee_pos_buffer[0, 1] = obs["robot0_eef_pos"]
+        # reverse the last dim of obs
+        # obs["robot0_eef_pos"] = 
+        # self.ee_pos_buffer[0, 1] = obs["robot0_eef_pos"] #obs["robot0_eef_pos"]
         # quat2euler
-        self.ee_ori_buffer[0, 1] = st.Rotation.from_quat(obs["robot0_eef_quat"]).as_euler("xyz")
+        # self.ee_ori_buffer[0, 1] = st.Rotation.from_quat(obs["robot0_eef_quat"]).as_euler("xyz")
         self.gripper_states_buffer[0, 1] = obs["robot0_gripper_qpos"]
         self.joint_states_buffer[0, 1] = obs["robot0_joint_pos"]
+        
+        # print("-"*20)
+        # print(f"updated gripper state buffer: {self.gripper_states_buffer}")
+        # print("^"*20)
+        
+        self.env_step+=1
 
     def run(self):
         old_a = None
@@ -236,6 +256,7 @@ class DPActionInput:
         
         self.new_obs(self.obs)
         self.new_obs(self.obs)
+        # exit()
         
         # printout obs key and shape
         # print("obs keys: ", self.obs.keys())
@@ -255,7 +276,7 @@ class DPActionInput:
             with torch.no_grad():
                 result = self.policy.predict_action(obs_dict)
                 action = result["action"][0].detach().to("cpu").numpy()
-                print("inference once")
+                print(f"inference once in env step {self.env_step}")
                 # print(action)
 
             # if a is not too small, step env
@@ -264,69 +285,71 @@ class DPActionInput:
             # for act_horizon in range(action.shape[0]):
             for act_horizon in range(8):
                 this_act = action[act_horizon]
+                # reverse the last dim of this act
+                
                 this_act = this_act.reshape(1, 7)
                 self.obs, self.r, self.done, self.info = self.env.step(this_act)
                 self.new_obs(self.obs)
                 # sleep 0.5
                 # time.sleep(0.2)
 
-            print("carries out 8 actions")
-            time.sleep(0.12)
+                print(f"carries out 1 action in env step {self.env_step}")
+                time.sleep(0.001)
             
             # self.new_obs(self.obs)
                 # old_a = self.a
                 # self.a = np.zeros(7)
 
-            success = list(self.info["success"])
+                success = list(self.info["success"])
 
-            video_img = rearrange(rgb.copy(), "b v h w c -> b v c h w")
-            b, _, c, h, w = video_img.shape
+                video_img = rearrange(rgb.copy(), "b v h w c -> b v c h w")
+                b, _, c, h, w = video_img.shape
 
-            frame = np.concatenate(
-                [
-                    video_img[:, 0],
-                    np.ones((b, c, h, w), dtype=np.uint8) * 255,
-                    video_img[:, 1],
-                ],
-                axis=-1,
-            )  # (b, c, h, 2w)
+                frame = np.concatenate(
+                    [
+                        video_img[:, 0],
+                        np.ones((b, c, h, w), dtype=np.uint8) * 255,
+                        video_img[:, 1],
+                    ],
+                    axis=-1,
+                )  # (b, c, h, 2w)
 
-            frame = render_done_to_boundary(frame, success)
-            self.episode_frames.append(frame)
+                frame = render_done_to_boundary(frame, success)
+                self.episode_frames.append(frame)
 
-            step_i += 1
-            last_info = self.info
+                step_i += 1
+                last_info = self.info
 
-            # Resize the frame to a larger window size
-            frame_rgb = rearrange(
-                rgb, "b v h w c -> b (v h) w c"
-            ).copy()  # Convert to OpenCV format, if v > 1, stacks views vertically
-            frame_bgr = cv2.cvtColor(
-                frame_rgb[0], cv2.COLOR_RGB2BGR
-            )  # Assuming single batch
-            desired_height = 1200  # Specify the desired height
-            desired_width = int(
-                frame_bgr.shape[1] * (desired_height / frame_bgr.shape[0])
-            )  # Maintain aspect ratio
-            large_frame = cv2.resize(frame_bgr, (desired_width, desired_height))
+                # Resize the frame to a larger window size
+                frame_rgb = rearrange(
+                    rgb, "b v h w c -> b (v h) w c"
+                ).copy()  # Convert to OpenCV format, if v > 1, stacks views vertically
+                frame_bgr = cv2.cvtColor(
+                    frame_rgb[0], cv2.COLOR_RGB2BGR
+                )  # Assuming single batch
+                desired_height = 1200  # Specify the desired height
+                desired_width = int(
+                    frame_bgr.shape[1] * (desired_height / frame_bgr.shape[0])
+                )  # Maintain aspect ratio
+                large_frame = cv2.resize(frame_bgr, (desired_width, desired_height))
 
-            if self.done:
-                large_frame = cv2.putText(
-                    large_frame,
-                    "Episode Done",
-                    (10, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 0, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
+                if self.done:
+                    large_frame = cv2.putText(
+                        large_frame,
+                        "Episode Done",
+                        (10, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 0, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
 
-            if not HEADLESS:
-                cv2.imshow("Real-time Video", large_frame)  # Display the frame
-                cv2.waitKey(10)  # Wait for 10 ms between frames
-            if self.horizon is not None and step_i >= self.horizon:
-                break
+                if not HEADLESS:
+                    cv2.imshow("Real-time Video", large_frame)  # Display the frame
+                    cv2.waitKey(10)  # Wait for 10 ms between frames
+                if self.horizon is not None and step_i >= self.horizon:
+                    break
 
         if not HEADLESS:
             cv2.destroyAllWindows()
