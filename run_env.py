@@ -209,6 +209,11 @@ class DPActionInput:
         # debug new_obs
         # print("^"*20)
         # print(f"step: {self.env_step}")
+        # # recursively print obs key and corresponding shape
+        # print("obs keys: ", obs.keys())
+        # for key in obs.keys():
+        #     print(key, obs[key].shape)
+        
         # print(f"entered gripper state: {obs['robot0_gripper_qpos']}")
         # print(f"gripper state buffer: {self.gripper_states_buffer}")
         
@@ -288,6 +293,7 @@ class DPActionInput:
                 # reverse the last dim of this act
                 
                 this_act = this_act.reshape(1, 7)
+                print(f"this_act shape: {this_act.shape}")
                 self.obs, self.r, self.done, self.info = self.env.step(this_act)
                 self.new_obs(self.obs)
                 # sleep 0.5
